@@ -1,0 +1,458 @@
+---
+title: "MOUD in Florida Medicaid Population"
+author: 'Michael Q. Maguire, MS'
+date: 'February 17, 2022'
+output: github_document
+---
+
+## Packages Used
+
+```{r packageLoad, message = FALSE}
+library(tidyverse)
+library(data.table)
+library(rvest)
+library(hrbrthemes)
+```
+
+```{r sdudFile, include = FALSE}
+file_location <- 'C:/Users/michaelqmaguire2/Dropbox (UFL)/01_projects/medicaid-drug-utilization/medicaid-drug-utilization/data/clean/03_sdud-redbook-final.csv'
+```
+
+## Read in the SDUD data set
+
+```{r sdudLoad}
+sdud <- fread(
+  file_location,
+  colClasses = c('proper_ndc' = 'character')
+)
+```
+
+## Subset to Florida Only and Create MOUD Flags
+
+Variable `moudFlag` represents whether the brand name has a pattern match with the below values.
+Variable `medication` represents the categorization according to AG.
+
+```{r sdudFL}
+sdudFL <- sdud[
+  i = (state == 'FL' & data.table::between(year, 2016, 2021)),
+  j = .(utilization.type, state, year, quarter, suppression, gennme, prodnme, numberrx)
+][
+  , 
+  `:=` (moudFlag = ifelse(grepl(x = prodnme, pattern = "bupreno|suboxone|zubsolv|cassipa|bunavail|subutex", ignore.case = TRUE) == TRUE, 1, 0),
+        medication = case_when(
+          grepl(x = prodnme, pattern = 'bunavail', ignore.case = TRUE) == TRUE ~ "Bunavail",
+          grepl(x = prodnme, pattern = 'subutex', ignore.case = TRUE) == TRUE ~ 'Subutex',
+          grepl(x = prodnme, pattern = 'suboxone', ignore.case = TRUE) == TRUE ~ 'Suboxone',
+          grepl(x = prodnme, pattern = 'cassipa', ignore.case = TRUE) == TRUE ~ 'Cassipa',
+          grepl(x = prodnme, pattern = 'zubsolv', ignore.case = TRUE) == TRUE ~ 'Zubsolv',
+          grepl(x = prodnme, pattern = 'buprenorphine', ignore.case = TRUE) == TRUE ~ 'Buprenorphine',
+          TRUE ~ 'Not an OUD Drug'
+          ),
+        yearQuarter = zoo::as.yearqtr(format(paste0(year, quarter)), "%Y%q")
+        )
+]
+
+setorder(sdudFL, state, yearQuarter, gennme, prodnme, suppression)
+
+sdudFL |> janitor::tabyl(moudFlag)
+sdudFL |> janitor::tabyl(medication)
+sdudFL |> janitor::tabyl(medication, moudFlag)
+```
+
+## Subset to only OUD medications and aggregate.
+
+```{r sdudFlAgg}
+sdudFLAggregate <- sdudFL[
+  i = moudFlag == 1 & suppression == 'F',
+  j = .(totalRX = sum(numberrx)),
+  by = .(yearQuarter, medication)
+]
+
+setorder(sdudFLAggregate, medication, yearQuarter)
+
+sdudFLAggregate
+```
+
+## Create table containing all years, quarters, and drugs.
+
+```{r yearQuarterTable}
+yearQuarter <- unique(sdudFL$yearQuarter, by = yearQuarter)
+
+allDrugs <- unique(sdudFLAggregate$medication, by = medication)
+
+cartesianYearQuarterDrug <- CJ(yearQuarter, allDrugs)
+
+cartesianYearQuarterDrug
+```
+
+## Full Join with the above table with the `sdudFLAggregate` to get values that don't exist for a given yearQuarter.
+
+```{r getAllQuarters}
+yearQuarterAllFLAggregate <- merge.data.table(
+  cartesianYearQuarterDrug,
+  sdudFLAggregate,
+  by.x = c('yearQuarter', 'allDrugs'),
+  by.y = c('yearQuarter', 'medication'),
+  all.x = TRUE
+)
+
+sum(is.na(yearQuarterAllFLAggregate$totalRX))
+
+yearQuarterAllFLAggregate[is.na(totalRX), totalRX := 0]
+
+yearQuarterAllFLAggregate
+
+sum(is.na(yearQuarterAllFLAggregate$totalRX))
+```
+
+# Plotting time!
+
+```{r plottingOUD, fig.width = 20, fig.height = 12}
+plotRawDrugCount <- yearQuarterAllFLAggregate |>
+  ggplot() +
+  geom_point(aes(x = as.factor(yearQuarter), y = totalRX, color = allDrugs), size = 2) +
+  geom_line(aes(x = as.factor(yearQuarter), y = totalRX, group = allDrugs, color = allDrugs), size = 1) +
+  scale_color_manual(values = c("Bunavail" = "grey", "Buprenorphine" = "#FA841A", "Suboxone" = "#004DA9", "Zubsolv" = "chartreuse4")) +
+  ggtitle("Florida MOUD Raw Prescription Drug Counts") +
+  xlab("Year-Quarter") +
+  ylab("Total Prescriptions") +
+  theme_ipsum_rc() + 
+  theme(
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 14, hjust = 0.5, vjust = -1),
+    axis.title.y = element_text(size = 14, hjust = 0.5),
+    legend.position = 'bottom',
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.key.size = unit(3, 'line')
+  ) +
+  labs(color = 'Drug Name')
+
+plotRawDrugCount
+```
+
+## Iteratively download files from Medicaid
+
+
+```{r fileDL, eval = FALSE, message = FALSE}
+achaURL <- 'https://ahca.myflorida.com/medicaid/Finance/data_analytics/enrollment_report/' # url itself
+achaRead <- read_html(achaURL) # read in the HTML
+achaFiles <- achaRead |> html_nodes('a') |> html_attr('href') |> str_subset('ENR') # extract needed elements
+achaTrimmed <- achaFiles |> str_extract(pattern = "docs.*") # extract anything after docs
+achaYears <- str_subset(achaTrimmed, pattern = "2016|2017|2018|2019|2020|2021") # extract files with desired years
+achaNames <- str_extract(achaYears, pattern = "ENR_.*") # get names for naming file on download.file
+achaFilesDLURL <- paste0(achaURL, achaYears) # paste url and name together for download.file
+
+# Iteration occurs here
+
+map2(
+  achaFilesDLURL,
+  achaNames,
+  ~download.file(.x, destfile = paste0("./data/raw/", .y), mode = 'wb')
+)
+
+# Renaming two pesky files.
+
+file.rename("./data/raw/ENR_February_2016.xls", "./data/raw/ENR_201602.xls")
+file.rename("./data/raw/ENR_January_2016.xls", "./data/raw/ENR_201601.xls")
+```
+
+## Showing files in directory
+
+```{r fileList}
+files <- list.files(path = './data/raw/', full.names = TRUE)
+files
+```
+
+## Iteratively determine how many columns exist in each file
+
+```{r colCheck, message = FALSE}
+numColumnsflMedicaid2016to2021 <- 
+  files |>
+  map_dfr(
+    ~(data.frame
+      (number_columns = ncol(
+        readxl::read_excel(
+          path = .,
+          skip = 6,
+          sheet = 'AGEGROUP'
+        )
+      ),
+      id = .)
+    )
+  )
+
+numColumnsflMedicaid2016to2021
+
+numColumnsflMedicaid2016to2021 |>
+  distinct(number_columns, .keep_all = TRUE)
+```
+
+We can see above that the files do not have the same lengths across the `AGEGROUP` sheet.
+
+I looked at the files that had different lengths and determined how to accommodate the code to each sheet.
+
+I also found that the row value of `TOTAL OF MEDICAID` contained the numbers we needed.
+
+```{r nameVector}
+namesAcha18 <- c(
+  'plan_name', 'type', 'region', 'blank', 'tanf_children_0_18', 'tanf_children_19_20', 'tanf_adult_21_over',
+  'tanf_total', 'blank2', 'medicaid_only_0_18', 'medicaid_only_19_20', 'medicaid_21_over', 'duals_0_18', 'duals_19_20',
+  'duals_21_over', 'medicaid_duals_total', 'blank3', 'children_percent'
+)
+
+namesAcha20 <- c(
+  'plan_name', 'type', 'region', 'blank', 'tanf_children_0_18', 'tanf_children_19_20', 'tanf_adult_21_over',
+  'tanf_total', 'blank2', 'medicaid_only_0_18', 'medicaid_only_19_20', 'medicaid_21_over', 'duals_0_18', 'duals_19_20',
+  'duals_21_over', 'medicaid_duals_total', 'blank3' , 'tanf_medicaid_duals_total', 'blank4', 'children_percent'
+)
+```
+
+## Extracting information from ACHA files
+
+Next, I extracted the file paths containing 20 columns, read them in, combined them, and selected the only row we needed.
+
+```{r extract20Cols}
+colsGE20 <- numColumnsflMedicaid2016to2021$id[numColumnsflMedicaid2016to2021$number_columns == 20]
+
+# Extract all 20 column files.
+
+acha20 <- setNames(
+  lapply(
+    colsGE20,
+    FUN = function(x) readxl::read_excel(
+      path = x,
+      sheet = 'AGEGROUP',
+      skip = 6,
+      col_names = namesAcha20,
+      col_types = 'text'
+      )
+    ),
+  colsGE20
+  )
+
+# Combine, and keep only necessary row. Extract date information from filename.
+
+flMedicaidGE20 <- as_tibble(
+  data.table::rbindlist(
+    lapply(
+      acha20,
+      subset,
+      plan_name == 'TOTAL OF MEDICAID'
+    ),
+    idcol = 'id'
+  )
+) |>
+  select(
+    plan_name, id, contains('21')
+  ) |>
+  mutate(
+    idDate = str_extract(string = id, pattern = '[:digit:]+'),
+    year = str_sub(idDate, 1, 4),
+    month = str_sub(idDate, 5, 6)
+  )
+```
+
+Next, I handled those files with differing column lengths. 
+
+The file that had 18 columns omitted certain columns that were in future reports, while the file with 24 columns read in columns that didn't exist.
+
+```{r otherFiles, message = FALSE}
+cols_24 <- numColumnsflMedicaid2016to2021 |> filter(number_columns == 24) |>
+  select(id) |>
+  as_vector()
+
+acha_24 <- readxl::read_excel(path = cols_24, sheet = 'AGEGROUP', skip = 6, col_names = FALSE, col_types = 'text') |>
+  select(-c(`...21`, `...22`, `...23`, `...24`)) 
+
+names(acha_24) <- namesAcha20
+
+acha_24_final <- acha_24 |>
+  filter(plan_name == 'TOTAL OF MEDICAID') |>
+  select(plan_name, contains('21')) |>
+  mutate(
+    id = cols_24,
+    idDate = str_extract(string = cols_24, pattern = '[:digit:]+'),
+    year = str_sub(idDate, 1, 4),
+    month = str_sub(idDate, 5, 6)
+  )
+
+acha_24_final
+
+cols_18 <- numColumnsflMedicaid2016to2021 |> filter(number_columns == 18) |>
+  select(id) |>
+  as_vector()
+
+acha_18_final <- readxl::read_excel(path = cols_18, sheet = 'AGEGROUP', skip = 6, col_names = namesAcha18, col_types = 'text') |>
+  filter(plan_name == 'TOTAL OF MEDICAID') |>
+  select(plan_name, contains('21')) |>
+  mutate(
+    id = cols_18,
+    idDate = str_extract(string = cols_18, pattern = '[:digit:]+'),
+    year = str_sub(idDate, 1, 4),
+    month = str_sub(idDate, 5, 6)
+  )
+
+acha_18_final
+```
+
+Finally, I combined them all into a single file and created date fields for aggregation/plotting.
+
+```{r singleFile}
+flMedicaid2016to2021 <- bind_rows(
+  flMedicaidGE20,
+  acha_18_final,
+  acha_24_final
+) |>
+  mutate(
+    across(.cols = tanf_adult_21_over:duals_21_over, as.numeric),
+    yearNum = zoo::as.yearmon(idDate, format = "%Y%m"),
+    yearQtr = zoo::as.yearqtr(yearNum, format = "%Y%m")
+  ) |> 
+  arrange(yearNum)
+
+flMedicaid2016to2021
+```
+
+# Start aggregating the ACHA Medicaid Population information
+
+```{r achaAgg}
+aggByMonth <- flMedicaid2016to2021 |>
+  group_by(yearNum) |>
+  mutate(
+    total = sum(across(.cols = tanf_adult_21_over:duals_21_over))
+  ) |>
+  distinct(yearNum, .keep_all = TRUE)
+
+aggByMonth
+
+aggByYearQtr <- flMedicaid2016to2021 |>
+  group_by(yearQtr) |>
+  mutate(
+    total = sum(across(.cols = tanf_adult_21_over:duals_21_over)) / 3
+  ) |>
+  distinct(yearQtr, .keep_all = TRUE)
+
+aggByYearQtr
+
+write_csv(aggByYearQtr, file = paste0('./data/clean/', format(Sys.Date(), '%Y%m%d'), "_fl-acha-aggregate.csv"), na = '')
+```
+
+## Plotting the aggregated ACHA Medicaid Population information
+
+First, aggregate by year and month.
+
+```{r plotAchaAggYearMonth, warning = FALSE, fig.width = 20, fig.height = 12}
+plotAggByMonth <- aggByMonth |>
+  ggplot() +
+  geom_col(aes(x = as.factor(yearNum), y = total, fill = as.factor(yearNum)), color = 'black') +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_viridis_d() +
+  ggtitle("Florida Adult (21+) Medicaid Population by Year and Month") +
+  xlab("Month-Year") +
+  ylab("Number of Enrollees Per Month") +
+  hrbrthemes::theme_ipsum_rc() +
+  theme(
+    axis.text.x = element_text(size = 14, angle = 90),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 14, hjust = 0.5, vjust = -1),
+    axis.title.y = element_text(size = 14, hjust = 0.5),
+    legend.position = 'none'
+  ) +
+  labs(
+    caption = 'Source: Florida Agency for Healthcare Administration \n
+               Download URL: https://ahca.myflorida.com/medicaid/Finance/data_analytics/enrollment_report/'
+  )
+
+plotAggByMonth
+```
+
+Next, aggregate by year and quarter.
+
+This calculation is done by summing enrollees across three months and then dividing by three.
+
+```{r plotAchaAggYearQtr, warning = FALSE, fig.width = 20, fig.height = 12}
+plotAggByYearQtr <- aggByYearQtr |>
+  ggplot() +
+  geom_col(aes(x = as.factor(yearQtr), y = total, fill = as.factor(yearQtr)), color = 'black') +
+  scale_y_continuous(labels = scales::comma) +
+  ggtitle("Florida Adult (21+) Medicaid Population by Year and Quarter") +
+  xlab("Year-Quarter") +
+  ylab("Number of Enrollees per Quarter") +
+  scale_fill_viridis_d() +
+  hrbrthemes::theme_ipsum_rc() +
+  theme(
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 14, hjust = 0.5, vjust = -1),
+    axis.title.y = element_text(size = 14, hjust = 0.5),
+    legend.position = 'none'
+  ) +
+  labs(
+    caption = 'Source: Florida Agency for Healthcare Administration \n
+               Download URL: https://ahca.myflorida.com/medicaid/Finance/data_analytics/enrollment_report/ \n 
+               Quarterly Population Calculation = (Month 1 + Month 2 + Month 3) / 3'
+  )
+
+plotAggByYearQtr
+```
+
+
+## Merge SDUD with ACHA Information
+
+```{r sdudAcha}
+moudWithFlMedicaid <- yearQuarterAllFLAggregate |>
+  inner_join(
+    select(aggByYearQtr, yearQtr, total),
+    by = c('yearQuarter' = 'yearQtr')
+  ) |>
+  mutate(ratePer100k = (totalRX / total) * 100000)
+
+moudWithFlMedicaid
+
+write_csv(moudWithFlMedicaid, file = paste0('./data/clean/', format(Sys.Date(), '%Y%m%d'), "_fl-moud-aggregate.csv"), na = '')
+```
+
+## Plot the Normalized Rate
+
+```{r moudNormalized100k, fig.width = 20, fig.height = 12}
+xPos <- aggByYearQtr |>
+  distinct(yearQtr) |>
+  rowid_to_column()
+
+xMinimum <- xPos$rowid[xPos$yearQtr == "2020 Q1"]
+xMaximum <- xPos$rowid[xPos$yearQtr == "2020 Q2"]
+
+plotMOUDWithFLMedicaid <- moudWithFlMedicaid |>
+  ggplot() + 
+  geom_point(aes(x = as.factor(yearQuarter), y = ratePer100k, group = allDrugs, color = allDrugs), size = 2) +
+  geom_line(aes(x = as.factor(yearQuarter), y = ratePer100k, group = allDrugs, color = allDrugs), size = 1) +
+  annotate('rect', xmin = xMinimum, xmax = xMaximum, ymin = -Inf, ymax = Inf, fill = 'red', alpha = 0.1) +
+  scale_color_manual(values = c("Bunavail" = "grey", "Buprenorphine" = "#FA841A", "Suboxone" = "#004DA9", "Zubsolv" = "chartreuse4")) +
+  xlab('Year - Quarter') +
+  ylab('Prescription Rate per 100,000 Adult Medicaid Enrollees') +
+  ggtitle("Normalized MOUD Prescription Rate - Florida") +
+  theme_ipsum_rc() +
+  theme(
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 16, hjust = 0.5, vjust = -1),
+    axis.title.y = element_text(size = 16, hjust = 0.5),
+    legend.position = 'bottom',
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.key.size = unit(3, 'line')
+  ) +
+  labs(color = 'Drug Name')
+  
+plotMOUDWithFLMedicaid
+```
+
+```{r plotWrite, include = FALSE}
+plots <- mget(ls(pattern = 'plot'))
+
+Cairo::CairoPDF(onefile = TRUE, file = paste0('./plots/', format(Sys.Date(), '%Y%m%d'), "_florida-moud-plots.pdf"), width = 18, height = 10)
+plots
+dev.off()
+```
