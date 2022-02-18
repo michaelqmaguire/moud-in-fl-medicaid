@@ -1,7 +1,7 @@
 MOUD in Florida Medicaid Population
 ================
 Michael Q. Maguire, MS
-February 17, 2022
+February 18th, 2022
 
 ## Packages Used
 
@@ -380,6 +380,10 @@ sum(is.na(yearQuarterAllFLAggregate$totalRX))
 
     ## [1] 0
 
+``` r
+write_csv(yearQuarterAllFLAggregate, file = paste0('./data/clean/', format(Sys.Date(), '%Y%m%d'), "_fl-prescriptions-aggregate.csv"), na = '')
+```
+
 # Plotting time!
 
 ``` r
@@ -756,25 +760,27 @@ aggByMonth <- flMedicaid2016to2021 |>
   ) |>
   distinct(yearNum, .keep_all = TRUE)
 
-aggByMonth
+aggByMonthDenom <- aggByMonth |>
+  select(yearNum, tanf_adult_21_over:duals_21_over, total)
+
+aggByMonthDenom
 ```
 
-    ## # A tibble: 72 x 11
+    ## # A tibble: 72 x 5
     ## # Groups:   yearNum [72]
-    ##    plan_name  id    tanf_adult_21_o~ medicaid_21_over duals_21_over idDate year 
-    ##    <chr>      <chr>            <dbl>            <dbl>         <dbl> <chr>  <chr>
-    ##  1 TOTAL OF ~ ./da~           618223           242625        756196 201601 2016 
-    ##  2 TOTAL OF ~ ./da~           625545           249567        758347 201602 2016 
-    ##  3 TOTAL OF ~ ./da~           620401           249509        758279 201603 2016 
-    ##  4 TOTAL OF ~ ./da~           616907           246055        759099 201604 2016 
-    ##  5 TOTAL OF ~ ./da~           619192           251946        764651 201605 2016 
-    ##  6 TOTAL OF ~ ./da~           612287           250391        765373 201606 2016 
-    ##  7 TOTAL OF ~ ./da~           612672           247332        767279 201607 2016 
-    ##  8 TOTAL OF ~ ./da~           618827           252607        770966 201608 2016 
-    ##  9 TOTAL OF ~ ./da~           614316           249152        771034 201609 2016 
-    ## 10 TOTAL OF ~ ./da~           607557           247551        771546 201610 2016 
-    ## # ... with 62 more rows, and 4 more variables: month <chr>, yearNum <yearmon>,
-    ## #   yearQtr <yearqtr>, total <dbl>
+    ##    yearNum   tanf_adult_21_over medicaid_21_over duals_21_over   total
+    ##    <yearmon>              <dbl>            <dbl>         <dbl>   <dbl>
+    ##  1 Jan 2016              618223           242625        756196 1617044
+    ##  2 Feb 2016              625545           249567        758347 1633459
+    ##  3 Mar 2016              620401           249509        758279 1628189
+    ##  4 Apr 2016              616907           246055        759099 1622061
+    ##  5 May 2016              619192           251946        764651 1635789
+    ##  6 Jun 2016              612287           250391        765373 1628051
+    ##  7 Jul 2016              612672           247332        767279 1627283
+    ##  8 Aug 2016              618827           252607        770966 1642400
+    ##  9 Sep 2016              614316           249152        771034 1634502
+    ## 10 Oct 2016              607557           247551        771546 1626654
+    ## # ... with 62 more rows
 
 ``` r
 aggByYearQtr <- flMedicaid2016to2021 |>
@@ -784,28 +790,31 @@ aggByYearQtr <- flMedicaid2016to2021 |>
   ) |>
   distinct(yearQtr, .keep_all = TRUE)
 
-aggByYearQtr
+aggByYearQtrDenom <- aggByYearQtr |>
+  select(yearQtr, total)
+
+aggByYearQtrDenom
 ```
 
-    ## # A tibble: 24 x 11
+    ## # A tibble: 24 x 2
     ## # Groups:   yearQtr [24]
-    ##    plan_name  id    tanf_adult_21_o~ medicaid_21_over duals_21_over idDate year 
-    ##    <chr>      <chr>            <dbl>            <dbl>         <dbl> <chr>  <chr>
-    ##  1 TOTAL OF ~ ./da~           618223           242625        756196 201601 2016 
-    ##  2 TOTAL OF ~ ./da~           616907           246055        759099 201604 2016 
-    ##  3 TOTAL OF ~ ./da~           612672           247332        767279 201607 2016 
-    ##  4 TOTAL OF ~ ./da~           607557           247551        771546 201610 2016 
-    ##  5 TOTAL OF ~ ./da~           607650           253777        777698 201701 2017 
-    ##  6 TOTAL OF ~ ./da~           599922           250821        781436 201704 2017 
-    ##  7 TOTAL OF ~ ./da~           580792           250135        787454 201707 2017 
-    ##  8 TOTAL OF ~ ./da~           571388           254142        795087 201710 2017 
-    ##  9 TOTAL OF ~ ./da~           553549           251010        800433 201801 2018 
-    ## 10 TOTAL OF ~ ./da~           535863           250979        800573 201804 2018 
-    ## # ... with 14 more rows, and 4 more variables: month <chr>, yearNum <yearmon>,
-    ## #   yearQtr <yearqtr>, total <dbl>
+    ##    yearQtr      total
+    ##    <yearqtr>    <dbl>
+    ##  1 2016 Q1   1626231.
+    ##  2 2016 Q2   1628634.
+    ##  3 2016 Q3   1634728.
+    ##  4 2016 Q4   1631855.
+    ##  5 2017 Q1   1637312 
+    ##  6 2017 Q2   1628608 
+    ##  7 2017 Q3   1613870 
+    ##  8 2017 Q4   1611012 
+    ##  9 2018 Q1   1598327.
+    ## 10 2018 Q2   1582947.
+    ## # ... with 14 more rows
 
 ``` r
-write_csv(aggByYearQtr, file = paste0('./data/clean/', format(Sys.Date(), '%Y%m%d'), "_fl-acha-aggregate.csv"), na = '')
+write_csv(aggByMonthDenom, file = paste0('./data/clean/', format(Sys.Date(), '%Y%m%d'), "_fl-monthly-enrollment-denominator.csv"), na = '')
+write_csv(aggByYearQtrDenom, file = paste0('./data/clean/', format(Sys.Date(), '%Y%m%d'), "_fl-quarterly-enrollment-denominator.csv"), na = '')
 ```
 
 ## Plotting the aggregated ACHA Medicaid Population information
@@ -813,7 +822,7 @@ write_csv(aggByYearQtr, file = paste0('./data/clean/', format(Sys.Date(), '%Y%m%
 First, aggregate by year and month.
 
 ``` r
-plotAggByMonth <- aggByMonth |>
+plotAggByMonth <- aggByMonthDenom |>
   ggplot() +
   geom_col(aes(x = as.factor(yearNum), y = total, fill = as.factor(yearNum)), color = 'black') +
   scale_y_continuous(labels = scales::comma) +
@@ -845,7 +854,7 @@ This calculation is done by summing enrollees across three months and
 then dividing by three.
 
 ``` r
-plotAggByYearQtr <- aggByYearQtr |>
+plotAggByYearQtr <- aggByYearQtrDenom |>
   ggplot() +
   geom_col(aes(x = as.factor(yearQtr), y = total, fill = as.factor(yearQtr)), color = 'black') +
   scale_y_continuous(labels = scales::comma) +
@@ -877,7 +886,7 @@ plotAggByYearQtr
 ``` r
 moudWithFlMedicaid <- yearQuarterAllFLAggregate |>
   inner_join(
-    select(aggByYearQtr, yearQtr, total),
+    select(aggByYearQtrDenom, yearQtr, total),
     by = c('yearQuarter' = 'yearQtr')
   ) |>
   mutate(ratePer100k = (totalRX / total) * 100000)
